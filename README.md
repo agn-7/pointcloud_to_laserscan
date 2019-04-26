@@ -12,6 +12,7 @@ This package makes two LaserScan messages from 2 Velodyne rows.
 
 ## Usage:
  - Clone this repo, move on `velodyne_to_lrf` branch.
+ - Make repo: on your workspace do `catkin_make`
  - `roscore`
  - `rosrun pointcloud_to_laserscan pointcloud_to_laserscan_node`
 

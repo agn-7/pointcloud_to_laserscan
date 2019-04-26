@@ -77,7 +77,7 @@ namespace pointcloud_to_laserscan
     void disconnectCb();
 
     ros::NodeHandle nh_, private_nh_;
-    ros::Publisher pub_;
+    ros::Publisher pub_, torso_pub_;
     boost::mutex connect_mutex_;
 
     boost::shared_ptr<tf2_ros::Buffer> tf2_;
@@ -90,6 +90,7 @@ namespace pointcloud_to_laserscan
     std::string target_frame_;
     double tolerance_;
     double min_height_, max_height_, angle_min_, angle_max_, angle_increment_, scan_time_, range_min_, range_max_;
+    double torso_max_height_, torso_min_height_;
     bool use_inf_;
   };
 

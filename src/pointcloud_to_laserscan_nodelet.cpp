@@ -56,15 +56,18 @@ namespace pointcloud_to_laserscan
 
     private_nh_.param<std::string>("target_frame", target_frame_, "");
     private_nh_.param<double>("transform_tolerance", tolerance_, 0.01);
-    private_nh_.param<double>("min_height", min_height_, 0.0);
-    private_nh_.param<double>("max_height", max_height_, 1.0);
+    private_nh_.param<double>("min_height", min_height_, -0.8);  // for legs
+    private_nh_.param<double>("max_height", max_height_, -0.6);  // for legs
 
-    private_nh_.param<double>("angle_min", angle_min_, -M_PI / 2.0);
-    private_nh_.param<double>("angle_max", angle_max_, M_PI / 2.0);
+    private_nh_.param<double>("angle_min", angle_min_, -M_PI);
+    private_nh_.param<double>("angle_max", angle_max_, M_PI);
     private_nh_.param<double>("angle_increment", angle_increment_, M_PI / 360.0);
     private_nh_.param<double>("scan_time", scan_time_, 1.0 / 30.0);
     private_nh_.param<double>("range_min", range_min_, 0.45);
-    private_nh_.param<double>("range_max", range_max_, 4.0);
+    private_nh_.param<double>("range_max", range_max_, 20.0);
+
+    private_nh_.param<double>("min_height", torso_min_height_, 0.0);  // for torso
+    private_nh_.param<double>("max_height", torso_max_height_, 0.2);  // for torso
 
     int concurrency_level;
     private_nh_.param<int>("concurrency_level", concurrency_level, 1);
@@ -104,29 +107,37 @@ namespace pointcloud_to_laserscan
       sub_.registerCallback(boost::bind(&PointCloudToLaserScanNodelet::cloudCb, this, _1));
     }
 
-    pub_ = nh_.advertise<sensor_msgs::LaserScan>("scan", 10,
-                                                 boost::bind(&PointCloudToLaserScanNodelet::connectCb, this),
-                                                 boost::bind(&PointCloudToLaserScanNodelet::disconnectCb, this));
+    pub_ = nh_.advertise<sensor_msgs::LaserScan>("scan", 10//,
+            //boost::bind(&PointCloudToLaserScanNodelet::connectCb, this)//,
+            //boost::bind(&PointCloudToLaserScanNodelet::disconnectCb, this)
+            );
+
+    torso_pub_ = nh_.advertise<sensor_msgs::LaserScan>("scan_ubg", 10//,
+            //boost::bind(&PointCloudToLaserScanNodelet::connectCb, this)//,
+            //boost::bind(&PointCloudToLaserScanNodelet::disconnectCb, this)
+            );
+
+    sub_.subscribe(nh_, "/velodyne_points", input_queue_size_); // added by aGn.
   }
 
   void PointCloudToLaserScanNodelet::connectCb()
   {
     boost::mutex::scoped_lock lock(connect_mutex_);
-    if (pub_.getNumSubscribers() > 0 && sub_.getSubscriber().getNumPublishers() == 0)
-    {
+    //if (pub_.getNumSubscribers() > 0 && sub_.getSubscriber().getNumPublishers() == 0)
+    //{
       NODELET_INFO("Got a subscriber to scan, starting subscriber to pointcloud");
-      sub_.subscribe(nh_, "cloud_in", input_queue_size_);
-    }
+      sub_.subscribe(nh_, "/velodyne_points", input_queue_size_);
+    //}
   }
 
   void PointCloudToLaserScanNodelet::disconnectCb()
   {
     boost::mutex::scoped_lock lock(connect_mutex_);
-    if (pub_.getNumSubscribers() == 0)
-    {
+    //if (pub_.getNumSubscribers() == 0)
+    //{
       NODELET_INFO("No subscibers to scan, shutting down subscriber to pointcloud");
       sub_.unsubscribe();
-    }
+    //}
   }
 
   void PointCloudToLaserScanNodelet::failureCb(const sensor_msgs::PointCloud2ConstPtr &cloud_msg,
@@ -140,39 +151,53 @@ namespace pointcloud_to_laserscan
   {
 
     //build laserscan output
-    sensor_msgs::LaserScan output;
-    output.header = cloud_msg->header;
+    sensor_msgs::LaserScan legs_output;
+    sensor_msgs::LaserScan torso_output;
+    legs_output.header = cloud_msg->header;
+    torso_output.header = cloud_msg->header;
     if (!target_frame_.empty())
     {
-      output.header.frame_id = target_frame_;
+      legs_output.header.frame_id  = target_frame_;  // TODO :: must be change.
+      torso_output.header.frame_id = target_frame_;  // TODO :: must be change.
     }
 
-    output.angle_min = angle_min_;
-    output.angle_max = angle_max_;
-    output.angle_increment = angle_increment_;
-    output.time_increment = 0.0;
-    output.scan_time = scan_time_;
-    output.range_min = range_min_;
-    output.range_max = range_max_;
+    legs_output.angle_min = angle_min_;
+    legs_output.angle_max = angle_max_;
+    legs_output.angle_increment = angle_increment_;
+    legs_output.time_increment = 0.0;
+    legs_output.scan_time = scan_time_;
+    legs_output.range_min = range_min_;
+    legs_output.range_max = range_max_;
+
+    torso_output.angle_min = angle_min_;
+    torso_output.angle_max = angle_max_;
+    torso_output.angle_increment = angle_increment_;
+    torso_output.time_increment = 0.0;
+    torso_output.scan_time = scan_time_;
+    torso_output.range_min = range_min_;
+    torso_output.range_max = range_max_;
 
     //determine amount of rays to create
-    uint32_t ranges_size = std::ceil((output.angle_max - output.angle_min) / output.angle_increment);
+    uint32_t ranges_size = std::ceil((legs_output.angle_max - legs_output.angle_min) / legs_output.angle_increment);
+//    uint32_t ranges_size = std::ceil(1440);  // aGn: Like a Hokuyo-UTM
 
     //determine if laserscan rays with no obstacle data will evaluate to infinity or max_range
     if (use_inf_)
     {
-      output.ranges.assign(ranges_size, std::numeric_limits<double>::infinity());
+        legs_output.ranges.assign(ranges_size, std::numeric_limits<double>::infinity());
+        torso_output.ranges.assign(ranges_size, std::numeric_limits<double>::infinity());
     }
     else
     {
-      output.ranges.assign(ranges_size, output.range_max + 1.0);
+        legs_output.ranges.assign(ranges_size, legs_output.range_max + 1.0);
+        torso_output.ranges.assign(ranges_size, torso_output.range_max + 1.0);
     }
 
     sensor_msgs::PointCloud2ConstPtr cloud_out;
     sensor_msgs::PointCloud2Ptr cloud;
 
     // Transform cloud if necessary
-    if (!(output.header.frame_id == cloud_msg->header.frame_id))
+    if (!(legs_output.header.frame_id == cloud_msg->header.frame_id))  // TODO
     {
       try
       {
@@ -191,7 +216,7 @@ namespace pointcloud_to_laserscan
       cloud_out = cloud_msg;
     }
 
-    // Iterate through pointcloud
+    // Iterate through pointcloud to create legs scan
     for (sensor_msgs::PointCloud2ConstIterator<float>
               iter_x(*cloud_out, "x"), iter_y(*cloud_out, "y"), iter_z(*cloud_out, "z");
               iter_x != iter_x.end();
@@ -219,21 +244,68 @@ namespace pointcloud_to_laserscan
       }
 
       double angle = atan2(*iter_y, *iter_x);
-      if (angle < output.angle_min || angle > output.angle_max)
+      if (angle < legs_output.angle_min || angle > legs_output.angle_max)
       {
-        NODELET_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, output.angle_min, output.angle_max);
+        NODELET_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, legs_output.angle_min,
+                legs_output.angle_max);
         continue;
       }
 
       //overwrite range at laserscan ray if new range is smaller
-      int index = (angle - output.angle_min) / output.angle_increment;
-      if (range < output.ranges[index])
+      int index = (angle - legs_output.angle_min) / legs_output.angle_increment;
+      if (range < legs_output.ranges[index])
       {
-        output.ranges[index] = range;
+        legs_output.ranges[index] = range;
       }
 
     }
-    pub_.publish(output);
+
+    // Iterate through pointcloud to create the torso scan.
+    for (sensor_msgs::PointCloud2ConstIterator<float>
+                   iter_x(*cloud_out, "x"), iter_y(*cloud_out, "y"), iter_z(*cloud_out, "z");
+           iter_x != iter_x.end();
+           ++iter_x, ++iter_y, ++iter_z)
+      {
+
+          if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z))
+          {
+              NODELET_DEBUG("rejected for nan in point(%f, %f, %f)\n", *iter_x, *iter_y, *iter_z);
+              continue;
+          }
+
+          if (*iter_z > torso_max_height_ || *iter_z < torso_min_height_)
+          {
+              NODELET_DEBUG("rejected for height %f not in range (%f, %f)\n", *iter_z, min_height_, max_height_);
+              continue;
+          }
+
+          double range = hypot(*iter_x, *iter_y);
+          if (range < range_min_)
+          {
+              NODELET_DEBUG("rejected for range %f below minimum value %f. Point: (%f, %f, %f)", range, range_min_, *iter_x, *iter_y,
+                            *iter_z);
+              continue;
+          }
+
+          double angle = atan2(*iter_y, *iter_x);
+          if (angle < torso_output.angle_min || angle > torso_output.angle_max)
+          {
+              NODELET_DEBUG("rejected for angle %f not in range (%f, %f)\n", angle, torso_output.angle_min,
+                      torso_output.angle_max);
+              continue;
+          }
+
+          //overwrite range at laserscan ray if new range is smaller
+          int index = (angle - torso_output.angle_min) / torso_output.angle_increment;
+          if (range < torso_output.ranges[index])
+          {
+              torso_output.ranges[index] = range;
+          }
+
+      }
+
+    pub_.publish(legs_output);  // publish scan for legs
+    torso_pub_.publish(torso_output); // publish scan_ubg for torso
   }
 
 }
